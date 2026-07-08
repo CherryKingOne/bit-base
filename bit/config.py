@@ -64,6 +64,9 @@ def load_config() -> BitConfig:
       - BIT_MODEL_DIR: 模型存储目录
       - HF_ENDPOINT:   HF 镜像地址（与 huggingface-cli 一致）
       - BIT_HF_MIRROR: HF 镜像地址（同 HF_ENDPOINT，bit 专用）
+
+    配置镜像源后，会自动同步设置 HF_ENDPOINT 环境变量，
+    使 huggingface_hub 库的所有操作（下载、搜索）自动使用镜像。
     """
     config = BitConfig()
 
@@ -87,5 +90,9 @@ def load_config() -> BitConfig:
                 config.hf_mirror = data["hf_mirror"]
         except Exception:
             pass
+
+    # 将镜像源同步到 HF_ENDPOINT 环境变量，让 huggingface_hub 自动识别
+    if config.hf_mirror:
+        os.environ["HF_ENDPOINT"] = config.hf_mirror
 
     return config

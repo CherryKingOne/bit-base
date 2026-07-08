@@ -1,8 +1,7 @@
-"""模型市场 — 搜索和浏览模型"""
+"""模型市场 — 搜索和浏览模型（使用 HuggingFace 官方 HfApi）"""
 
 from __future__ import annotations
 
-import httpx
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -10,9 +9,6 @@ from rich.panel import Panel
 from bit.config import BitConfig, load_config
 
 console = Console()
-
-# 默认 HF API 地址，运行时可通过 config.hf_base 使用镜像
-HF_API = f"{load_config().hf_base}/api/models"
 
 # 常用模型预定义（快速访问）
 CURATED_MODELS = {
@@ -45,6 +41,13 @@ CURATED_MODELS = {
         {"name": "BAAI/bge-reranker-large", "desc": "BGE Reranker Large", "size": "~1.3GB"},
     ],
 }
+
+
+def _get_hf_api():
+    """获取 HfApi 实例（自动使用 config 中的镜像源）"""
+    from huggingface_hub import HfApi
+    config = load_config()
+    return HfApi(endpoint=config.hf_base)
 
 
 def search_models(
@@ -82,23 +85,21 @@ def search_models(
 
 
 def get_model_info(model_name: str) -> dict | None:
-    """获取模型详细信息"""
+    """获取模型详细信息（使用 HfApi）"""
     try:
-        api_base = f"{load_config().hf_base}/api/models"
-        resp = httpx.get(f"{api_base}/{model_name}", timeout=30, follow_redirects=True)
-        resp.raise_for_status()
-        data = resp.json()
+        api = _get_hf_api()
+        info = api.model_info(model_name, files_metadata=True)
     except Exception as e:
         console.print(f"[red]获取模型信息失败: {e}[/red]")
         return None
 
-    siblings = data.get("siblings", [])
+    siblings = info.siblings or []
     files = []
     total_size = 0
 
     for s in siblings:
-        filename = s.get("rfilename", "")
-        size = s.get("size", 0)
+        filename = s.rfilename
+        size = s.size or 0
         total_size += size
         if filename.endswith(".gguf"):
             files.append({"name": filename, "size": _format_size(size), "type": "gguf"})
@@ -117,13 +118,13 @@ def get_model_info(model_name: str) -> dict | None:
 
     return {
         "name": model_name,
-        "desc": data.get("description", "")[:200],
-        "downloads": data.get("downloads", 0),
-        "likes": data.get("likes", 0),
+        "desc": (info.card_data.description if info.card_data and info.card_data.description else "")[:200],
+        "downloads": info.downloads or 0,
+        "likes": info.likes or 0,
         "engines": engines,
         "total_size": _format_size(total_size),
         "files": files[:20],  # 最多显示20个文件
-        "tags": data.get("tags", [])[:10],
+        "tags": (info.tags or [])[:10],
     }
 
 
@@ -152,32 +153,21 @@ def list_categories() -> list[dict]:
 
 
 def _search_hf(keyword: str, limit: int) -> list[dict]:
-    """搜索 HuggingFace"""
-    api_base = f"{load_config().hf_base}/api/models"
-    resp = httpx.get(
-        api_base,
-        params={
-            "search": keyword,
-            "sort": "downloads",
-            "direction": "-1",
-            "limit": limit,
-        },
-        timeout=30,
-    )
-    resp.raise_for_status()
+    """搜索 HuggingFace（使用 HfApi.list_models）"""
+    api = _get_hf_api()
 
     results = []
-    for m in resp.json():
-        model_id = m.get("id", "")
-        siblings = m.get("siblings", [])
-        has_gguf = any(s.get("rfilename", "").endswith(".gguf") for s in siblings)
+    for m in api.list_models(search=keyword, sort="downloads", limit=limit):
+        model_id = m.id
+        siblings = m.siblings or []
+        has_gguf = any(s.rfilename.endswith(".gguf") for s in siblings if s.rfilename)
 
         engine = "llama.cpp" if has_gguf else "vllm"
-        downloads = m.get("downloads", 0)
+        downloads = m.downloads or 0
 
         results.append({
             "name": model_id,
-            "desc": m.get("description", "")[:100] if m.get("description") else "",
+            "desc": "",
             "engine": engine,
             "precision": "多版本",
             "size": f"{downloads:,} downloads",

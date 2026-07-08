@@ -37,6 +37,8 @@ MESSAGES = {
     "pull_not_found": "Model not found: {}",
     "pull_no_files": "No matching model files found",
     "pull_timeout": "HF API request timed out",
+    "pull_invalid_type": "Unsupported model type: {}",
+    "pull_supported_types": "Supported types: {}",
 
     # Command: list
     "list": "List downloaded models",
@@ -136,6 +138,11 @@ MESSAGES = {
     "categories_llm": "Large Language Models",
     "categories_embedding": "Embedding Models",
     "categories_multimodal": "Multimodal Models",
+    "categories_video": "Video Models",
+    "categories_tts": "Text-to-Speech",
+    "categories_asr": "Speech Recognition",
+    "categories_ocr": "OCR Models",
+    "categories_reranker": "Reranker Models",
 
     # Command: daemon
     "daemon": "Daemon process management",
@@ -206,4 +213,6 @@ MESSAGES = {
     "Key description": "Key description",
     "Language (zh/en/ja/ko/fr/de/ru)": "Language (zh/en/ja/ko/fr/de/ru)",
     "Set default language": "Set default language",
+    "Model type (llm/video/tts/asr/ocr/embedding/reranker)": "Model type (llm/video/tts/asr/ocr/embedding/reranker)",
+    "Model type": "Model type",
 }

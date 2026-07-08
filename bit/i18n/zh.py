@@ -37,6 +37,8 @@ MESSAGES = {
     "pull_not_found": "未找到模型: {}",
     "pull_no_files": "未找到匹配的模型文件",
     "pull_timeout": "HF API 请求超时",
+    "pull_invalid_type": "不支持的模型类型: {}",
+    "pull_supported_types": "支持的类型: {}",
 
     # 命令: list
     "list": "查看已下载模型",
@@ -136,6 +138,11 @@ MESSAGES = {
     "categories_llm": "大语言模型",
     "categories_embedding": "嵌入模型",
     "categories_multimodal": "多模态模型",
+    "categories_video": "视频模型",
+    "categories_tts": "语音合成",
+    "categories_asr": "语音识别",
+    "categories_ocr": "OCR 模型",
+    "categories_reranker": "重排序模型",
 
     # 命令: daemon
     "daemon": "守护进程管理",
@@ -206,4 +213,6 @@ MESSAGES = {
     "Key description": "密钥描述",
     "Language (zh/en/ja/ko/fr/de/ru)": "语言 (zh/en/ja/ko/fr/de/ru)",
     "Set default language": "设置默认语言",
+    "Model type (llm/video/tts/asr/ocr/embedding/reranker)": "模型类型 (llm/video/tts/asr/ocr/embedding/reranker)",
+    "Model type": "模型类型",
 }

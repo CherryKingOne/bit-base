@@ -79,6 +79,8 @@ _TR = {
         "Language (zh/en/ja/ko/fr/de/ru)": "语言 (zh/en/ja/ko/fr/de/ru)",
         "Set default language": "设置默认语言",
         "Multi-Engine Model Inference Platform": "多引擎模型推理平台",
+        "Model type (llm/video/tts/asr/ocr/embedding/reranker)": "模型类型 (llm/video/tts/asr/ocr/embedding/reranker)",
+        "Model type": "模型类型",
     },
     "ja": {
         "Switch language": "言語を切り替え",
@@ -116,6 +118,8 @@ _TR = {
         "Language (zh/en/ja/ko/fr/de/ru)": "言語 (zh/en/ja/ko/fr/de/ru)",
         "Set default language": "デフォルト言語を設定",
         "Multi-Engine Model Inference Platform": "マルチエンジンモデル推論プラットフォーム",
+        "Model type (llm/video/tts/asr/ocr/embedding/reranker)": "モデルタイプ (llm/video/tts/asr/ocr/embedding/reranker)",
+        "Model type": "モデルタイプ",
     },
     "ko": {
         "Switch language": "언어 전환",
@@ -153,6 +157,8 @@ _TR = {
         "Language (zh/en/ja/ko/fr/de/ru)": "언어 (zh/en/ja/ko/fr/de/ru)",
         "Set default language": "기본 언어 설정",
         "Multi-Engine Model Inference Platform": "멀티 엔진 모델 추론 플랫폼",
+        "Model type (llm/video/tts/asr/ocr/embedding/reranker)": "모델 타입 (llm/video/tts/asr/ocr/embedding/reranker)",
+        "Model type": "모델 타입",
     },
     "fr": {
         "Switch language": "Changer de langue",
@@ -190,6 +196,8 @@ _TR = {
         "Language (zh/en/ja/ko/fr/de/ru)": "Langue (zh/en/ja/ko/fr/de/ru)",
         "Set default language": "Définir la langue par défaut",
         "Multi-Engine Model Inference Platform": "Plateforme d'inférence multi-moteur",
+        "Model type (llm/video/tts/asr/ocr/embedding/reranker)": "Type de modèle (llm/video/tts/asr/ocr/embedding/reranker)",
+        "Model type": "Type de modèle",
     },
     "de": {
         "Switch language": "Sprache wechseln",
@@ -227,6 +235,8 @@ _TR = {
         "Language (zh/en/ja/ko/fr/de/ru)": "Sprache (zh/en/ja/ko/fr/de/ru)",
         "Set default language": "Standardsprache festlegen",
         "Multi-Engine Model Inference Platform": "Multi-Engine-Modell-Inferenz-Plattform",
+        "Model type (llm/video/tts/asr/ocr/embedding/reranker)": "Modelltyp (llm/video/tts/asr/ocr/embedding/reranker)",
+        "Model type": "Modelltyp",
     },
     "ru": {
         "Switch language": "Переключить язык",
@@ -264,6 +274,8 @@ _TR = {
         "Language (zh/en/ja/ko/fr/de/ru)": "Язык (zh/en/ja/ko/fr/de/ru)",
         "Set default language": "Установить язык по умолчанию",
         "Multi-Engine Model Inference Platform": "Платформа инференса моделей с многоязыковыми движками",
+        "Model type (llm/video/tts/asr/ocr/embedding/reranker)": "Тип модели (llm/video/tts/asr/ocr/embedding/reranker)",
+        "Model type": "Тип модели",
     },
 }
 
@@ -367,15 +379,26 @@ def version():
 
 @app.command(help=t("Pull model from HuggingFace"))
 def pull(
+    model_type: str = typer.Argument("llm", help=t("Model type (llm/video/tts/asr/ocr/embedding/reranker)")),
     model: str = typer.Argument(help=t("Model name")),
-    engine: str = typer.Option("llama.cpp", "--engine", "-e", help=t("Inference engine")),
-    precision: str = typer.Option("q4_k_m", "--precision", "-p", help=t("Model precision")),
+    engine: str | None = typer.Option(None, "--engine", "-e", help=t("Inference engine")),
+    precision: str | None = typer.Option(None, "--precision", "-p", help=t("Model precision")),
     dir: str | None = typer.Option(None, "--dir", "-d", help=t("Custom storage path")),
 ):
     """Pull model from HuggingFace"""
     from bit.models.downloader import pull_model
+    from bit.models.types import resolve_model_type
     from bit.config import load_config
-    pull_model(load_config(), model, engine, precision, dir)
+    from rich.console import Console
+    console = Console()
+
+    resolved_type = resolve_model_type(model_type)
+    if resolved_type is None:
+        console.print(f"[red]{t('pull_invalid_type', model_type)}[/red]")
+        console.print(f"[yellow]{t('pull_supported_types', 'llm, video, tts, asr, ocr, embedding, reranker')}[/yellow]")
+        return
+
+    pull_model(load_config(), model, resolved_type, engine, precision, dir)
 
 
 @app.command(name="list", help=t("List downloaded models"))
@@ -392,11 +415,12 @@ def list_models():
         return
     table = Table(title=t("list_title"))
     table.add_column(t("list_name"), style="cyan")
+    table.add_column(t("Model type"), style="blue")
     table.add_column(t("list_engine"), style="green")
     table.add_column(t("list_precision"), style="magenta")
     table.add_column(t("list_size"), style="white")
     for m in models:
-        table.add_row(m["name"], m["engine"], m["precision"], m["size"])
+        table.add_row(m["name"], m.get("model_type", "llm"), m["engine"], m["precision"], m["size"])
     console.print(table)
 
 

@@ -26,8 +26,22 @@ CURATED_MODELS = {
         {"name": "BAAI/bge-small-zh-v1.5", "desc": "BGE 中文小模型", "size": "~100MB"},
         {"name": "BAAI/bge-large-zh-v1.5", "desc": "BGE 中文大模型", "size": "~1.3GB"},
     ],
-    "multimodal": [
+    "video": [
         {"name": "Qwen/Qwen2-VL-7B-Instruct", "desc": "通义千问2 视觉语言 7B", "size": "~5GB"},
+    ],
+    "tts": [
+        {"name": "microsoft/speecht5_tts", "desc": "Microsoft SpeechT5 TTS", "size": "~500MB"},
+    ],
+    "asr": [
+        {"name": "openai/whisper-large-v3", "desc": "OpenAI Whisper Large v3", "size": "~3GB"},
+        {"name": "openai/whisper-small", "desc": "OpenAI Whisper Small", "size": "~500MB"},
+    ],
+    "ocr": [
+        {"name": "PaddlePaddle/PP-OCRv4", "desc": "PaddleOCR PP-OCRv4", "size": "~200MB"},
+    ],
+    "reranker": [
+        {"name": "BAAI/bge-reranker-base", "desc": "BGE Reranker Base", "size": "~300MB"},
+        {"name": "BAAI/bge-reranker-large", "desc": "BGE Reranker Large", "size": "~1.3GB"},
     ],
 }
 
@@ -113,11 +127,26 @@ def get_model_info(model_name: str) -> dict | None:
 
 def list_categories() -> list[dict]:
     """列出模型分类"""
-    return [
-        {"name": "llm", "desc": "大语言模型", "count": len(CURATED_MODELS.get("llm", []))},
-        {"name": "embedding", "desc": "嵌入模型", "count": len(CURATED_MODELS.get("embedding", []))},
-        {"name": "multimodal", "desc": "多模态模型", "count": len(CURATED_MODELS.get("multimodal", []))},
-    ]
+    from bit.i18n.translator import t
+
+    category_labels = {
+        "llm": t("categories_llm"),
+        "embedding": t("categories_embedding"),
+        "video": t("categories_video"),
+        "tts": t("categories_tts"),
+        "asr": t("categories_asr"),
+        "ocr": t("categories_ocr"),
+        "reranker": t("categories_reranker"),
+    }
+
+    result = []
+    for cat_name in ["llm", "video", "tts", "asr", "ocr", "embedding", "reranker"]:
+        result.append({
+            "name": cat_name,
+            "desc": category_labels.get(cat_name, cat_name),
+            "count": len(CURATED_MODELS.get(cat_name, [])),
+        })
+    return result
 
 
 def _search_hf(keyword: str, limit: int) -> list[dict]:

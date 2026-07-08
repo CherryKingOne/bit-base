@@ -31,6 +31,7 @@ def list_models(config: BitConfig) -> list[dict]:
                 "name": meta.get("name", parent.name),
                 "engine": meta.get("engine", "unknown"),
                 "precision": meta.get("precision", "unknown"),
+                "model_type": meta.get("model_type", "llm"),
                 "size": _format_size(size),
                 "path": str(parent),
                 "downloaded_at": meta.get("downloaded_at"),

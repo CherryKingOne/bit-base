@@ -19,6 +19,7 @@ from rich.progress import (
 )
 
 from bit.config import BitConfig
+from bit.models.types import get_model_type_info
 
 console = Console()
 
@@ -29,16 +30,34 @@ HF_DOWNLOAD = "https://huggingface.co"
 def pull_model(
     config: BitConfig,
     model_name: str,
-    engine: str = "llama.cpp",
-    precision: str = "q4_k_m",
+    model_type: str = "llm",
+    engine: str | None = None,
+    precision: str | None = None,
     custom_dir: str | None = None,
 ) -> Path | None:
-    """从 HuggingFace 拉取模型"""
+    """从 HuggingFace 拉取模型
+
+    Args:
+        config: 全局配置
+        model_name: 模型名称（如 Qwen/Qwen3-8B）
+        model_type: 模型类型（llm/video/tts/asr/ocr/embedding/reranker）
+        engine: 推理引擎，None 则按类型自动选择
+        precision: 模型精度，仅 LLM 类型有效
+        custom_dir: 自定义存储路径
+    """
+    type_info = get_model_type_info(model_type)
+
+    # 按类型自动选择引擎和精度
+    if engine is None:
+        engine = type_info["default_engine"]
+    if precision is None:
+        precision = "q4_k_m" if type_info["has_precision"] else "none"
+
     # 确定存储路径
     if custom_dir:
         model_dir = Path(custom_dir) / _safe_name(model_name)
     else:
-        model_dir = config.models_path("llm") / _safe_name(model_name)
+        model_dir = config.models_path(model_type) / _safe_name(model_name)
 
     # 检查是否已下载
     meta_file = model_dir / ".bit_meta.json"
@@ -49,13 +68,13 @@ def pull_model(
 
     model_dir.mkdir(parents=True, exist_ok=True)
 
-    console.print(f"[cyan]正在查询模型信息: {model_name}[/cyan]")
+    console.print(f"[cyan]正在查询模型信息: {model_name} (type={model_type})[/cyan]")
 
     # 获取模型文件列表
-    files = _get_model_files(model_name, precision)
+    files = _get_model_files(model_name, precision, model_type)
     if not files:
-        console.print(f"[red]未找到匹配的模型文件 (precision={precision})[/red]")
-        console.print("[yellow]提示: 尝试其他精度或检查模型名称[/yellow]")
+        console.print(f"[red]未找到匹配的模型文件 (type={model_type}, precision={precision})[/red]")
+        console.print("[yellow]提示: 检查模型名称或尝试其他类型[/yellow]")
         return None
 
     total_size = sum(f.get("size", 0) for f in files)
@@ -69,14 +88,18 @@ def pull_model(
         return None
 
     # 保存元数据
-    _save_metadata(model_dir, model_name, engine, precision)
+    _save_metadata(model_dir, model_name, engine, precision, model_type)
 
     console.print(f"[green]✓ 模型已保存到: {model_dir}[/green]")
     return model_dir
 
 
-def _get_model_files(model_name: str, precision: str) -> list[dict]:
-    """获取模型文件列表"""
+def _get_model_files(model_name: str, precision: str, model_type: str = "llm") -> list[dict]:
+    """获取模型文件列表
+
+    LLM 类型：优先筛选匹配精度的 GGUF 文件
+    其他类型：下载全部文件（跳过精度筛选）
+    """
     try:
         resp = httpx.get(f"{HF_API}/{model_name}", timeout=30, follow_redirects=True)
         resp.raise_for_status()
@@ -93,18 +116,20 @@ def _get_model_files(model_name: str, precision: str) -> list[dict]:
 
     files = []
     siblings = data.get("siblings", [])
+    type_info = get_model_type_info(model_type)
 
-    # 优先筛选 GGUF 文件
-    for s in siblings:
-        filename = s.get("rfilename", "")
-        if filename.endswith(".gguf") and _match_precision(filename, precision):
-            files.append({
-                "filename": filename,
-                "url": f"{HF_DOWNLOAD}/{model_name}/resolve/main/{filename}",
-                "size": s.get("size", 0),
-            })
+    # LLM 类型：优先筛选匹配精度的 GGUF 文件
+    if type_info["has_precision"]:
+        for s in siblings:
+            filename = s.get("rfilename", "")
+            if filename.endswith(".gguf") and _match_precision(filename, precision):
+                files.append({
+                    "filename": filename,
+                    "url": f"{HF_DOWNLOAD}/{model_name}/resolve/main/{filename}",
+                    "size": s.get("size", 0),
+                })
 
-    # 如果没有 GGUF，下载全部文件（用于 vLLM/SGLang）
+    # 如果没有匹配的 GGUF（或非 LLM 类型），下载全部文件
     if not files:
         for s in siblings:
             filename = s.get("rfilename", "")
@@ -179,12 +204,15 @@ def _download_files(files: list[dict], model_dir: Path) -> None:
                 raise
 
 
-def _save_metadata(model_dir: Path, name: str, engine: str, precision: str) -> None:
+def _save_metadata(
+    model_dir: Path, name: str, engine: str, precision: str, model_type: str = "llm"
+) -> None:
     """保存模型元数据"""
     meta = {
         "name": name,
         "engine": engine,
         "precision": precision,
+        "model_type": model_type,
         "downloaded_at": time.time(),
     }
     (model_dir / ".bit_meta.json").write_text(json.dumps(meta, indent=2))

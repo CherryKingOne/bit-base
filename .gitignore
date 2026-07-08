@@ -28,3 +28,9 @@ Thumbs.db
 # Project specific
 ~/.bit/
 *.log
+
+# Model cache (downloaded model files)
+model_cache/
+*.part
+
+

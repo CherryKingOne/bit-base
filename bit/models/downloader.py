@@ -1,4 +1,4 @@
-"""模型下载 — 从 HuggingFace 拉取模型"""
+"""模型下载 — 从 HuggingFace 拉取模型（支持断点续传、自动重试、镜像源）"""
 
 from __future__ import annotations
 
@@ -23,8 +23,11 @@ from bit.models.types import get_model_type_info
 
 console = Console()
 
-HF_API = "https://huggingface.co/api/models"
-HF_DOWNLOAD = "https://huggingface.co"
+# 最大重试次数
+MAX_RETRIES = 3
+
+# 重试之间的等待秒数（指数退避基数）
+RETRY_BACKOFF_BASE = 2
 
 
 def pull_model(
@@ -68,10 +71,13 @@ def pull_model(
 
     model_dir.mkdir(parents=True, exist_ok=True)
 
+    hf_base = config.hf_base
+    if config.hf_mirror:
+        console.print(f"[cyan]使用镜像源: {config.hf_mirror}[/cyan]")
     console.print(f"[cyan]正在查询模型信息: {model_name} (type={model_type})[/cyan]")
 
     # 获取模型文件列表
-    files = _get_model_files(model_name, precision, model_type)
+    files = _get_model_files(hf_base, model_name, precision, model_type)
     if not files:
         console.print(f"[red]未找到匹配的模型文件 (type={model_type}, precision={precision})[/red]")
         console.print("[yellow]提示: 检查模型名称或尝试其他类型[/yellow]")
@@ -82,7 +88,7 @@ def pull_model(
 
     # 下载文件
     try:
-        _download_files(files, model_dir)
+        _download_files(files, model_dir, hf_base)
     except Exception as e:
         console.print(f"[red]下载失败: {e}[/red]")
         return None
@@ -94,14 +100,17 @@ def pull_model(
     return model_dir
 
 
-def _get_model_files(model_name: str, precision: str, model_type: str = "llm") -> list[dict]:
+def _get_model_files(
+    hf_base: str, model_name: str, precision: str, model_type: str = "llm"
+) -> list[dict]:
     """获取模型文件列表
 
     LLM 类型：优先筛选匹配精度的 GGUF 文件
     其他类型：下载全部文件（跳过精度筛选）
     """
+    api_url = f"{hf_base}/api/models/{model_name}"
     try:
-        resp = httpx.get(f"{HF_API}/{model_name}", timeout=30, follow_redirects=True)
+        resp = httpx.get(api_url, timeout=httpx.Timeout(connect=15, read=30, write=10, pool=30), follow_redirects=True)
         resp.raise_for_status()
         data = resp.json()
     except httpx.HTTPStatusError as e:
@@ -125,7 +134,7 @@ def _get_model_files(model_name: str, precision: str, model_type: str = "llm") -
             if filename.endswith(".gguf") and _match_precision(filename, precision):
                 files.append({
                     "filename": filename,
-                    "url": f"{HF_DOWNLOAD}/{model_name}/resolve/main/{filename}",
+                    "url": f"{hf_base}/{model_name}/resolve/main/{filename}",
                     "size": s.get("size", 0),
                 })
 
@@ -136,7 +145,7 @@ def _get_model_files(model_name: str, precision: str, model_type: str = "llm") -
             if filename and not filename.startswith(".") and not filename.endswith(".gitignore"):
                 files.append({
                     "filename": filename,
-                    "url": f"{HF_DOWNLOAD}/{model_name}/resolve/main/{filename}",
+                    "url": f"{hf_base}/{model_name}/resolve/main/{filename}",
                     "size": s.get("size", 0),
                 })
 
@@ -169,8 +178,8 @@ def _match_precision(filename: str, precision: str) -> bool:
     return False
 
 
-def _download_files(files: list[dict], model_dir: Path) -> None:
-    """下载文件列表"""
+def _download_files(files: list[dict], model_dir: Path, hf_base: str) -> None:
+    """下载文件列表（支持断点续传和自动重试）"""
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -186,22 +195,132 @@ def _download_files(files: list[dict], model_dir: Path) -> None:
             size = file_info.get("size", 0)
 
             dest = model_dir / filename
-            if dest.exists() and dest.stat().st_size == size:
+            # 确保文件的父目录存在（处理带子目录的文件如 assets/xxx.png）
+            dest.parent.mkdir(parents=True, exist_ok=True)
+
+            # 已完整下载则跳过
+            if dest.exists() and size > 0 and dest.stat().st_size == size:
                 console.print(f"  [dim]跳过已存在: {filename}[/dim]")
                 continue
 
-            task = progress.add_task(f"下载 {filename}", total=size or None)
+            _download_with_retry(url, dest, filename, size, progress)
 
-            try:
-                with httpx.stream("GET", url, timeout=300, follow_redirects=True) as resp:
-                    resp.raise_for_status()
-                    with open(dest, "wb") as f:
-                        for chunk in resp.iter_bytes(chunk_size=65536):
-                            f.write(chunk)
-                            progress.update(task, advance=len(chunk))
-            except Exception as e:
-                console.print(f"  [red]下载 {filename} 失败: {e}[/red]")
+
+def _download_with_retry(
+    url: str,
+    dest: Path,
+    filename: str,
+    expected_size: int,
+    progress: Progress,
+) -> None:
+    """带断点续传和自动重试的下载
+
+    - 使用 .part 临时文件，完成后原子重命名
+    - 通过 HTTP Range 头实现断点续传
+    - 连接断开时自动重试（指数退避）
+    """
+    part_file = dest.with_suffix(dest.suffix + ".part")
+    max_retries = MAX_RETRIES
+
+    for attempt in range(1, max_retries + 1):
+        # 获取已下载的字节数（用于断点续传）
+        existing_bytes = part_file.stat().st_size if part_file.exists() else 0
+
+        # 如果已有完整文件大小的数据但 expected_size 为 0（未知大小），尝试完成
+        if expected_size > 0 and existing_bytes >= expected_size:
+            part_file.rename(dest)
+            return
+
+        task = progress.add_task(
+            f"下载 {filename}" + (f" (续传 {existing_bytes}B)" if existing_bytes else ""),
+            total=expected_size or None,
+            completed=existing_bytes if expected_size else 0,
+        )
+
+        try:
+            _do_download(url, part_file, existing_bytes, task, progress)
+
+            # 下载完成，原子重命名
+            if part_file.exists():
+                if expected_size > 0 and part_file.stat().st_size != expected_size:
+                    raise IOError(
+                        f"文件大小不匹配: 预期 {expected_size}, 实际 {part_file.stat().st_size}"
+                    )
+                part_file.rename(dest)
+
+            progress.update(task, completed=dest.stat().st_size if dest.exists() else (expected_size or 0))
+            return
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 416 and part_file.exists():
+                # Range Not Satisfiable — 文件可能已完整下载
+                progress.update(task, completed=expected_size)
+                part_file.rename(dest)
+                return
+            progress.remove_task(task)
+            if attempt < max_retries:
+                _retry_wait(attempt, filename, e)
+            else:
                 raise
+
+        except (httpx.TransportError, httpx.RemoteProtocolError, ConnectionError, IOError) as e:
+            progress.remove_task(task)
+            if attempt < max_retries:
+                _retry_wait(attempt, filename, e)
+            else:
+                raise
+
+        except Exception as e:
+            progress.remove_task(task)
+            console.print(f"  [red]下载 {filename} 失败: {e}[/red]")
+            raise
+
+    # 不应到达此处
+    raise RuntimeError(f"下载 {filename} 失败: 已达最大重试次数")
+
+
+def _do_download(
+    url: str,
+    part_file: Path,
+    existing_bytes: int,
+    task,
+    progress: Progress,
+) -> None:
+    """执行单次下载（带断点续传）
+
+    使用 Range 头从 existing_bytes 位置继续下载。
+    超时设置: 连接 15s，读取 60s（大文件需较长读取超时）。
+    """
+    headers = {}
+    mode = "wb"
+
+    if existing_bytes > 0:
+        headers["Range"] = f"bytes={existing_bytes}-"
+        mode = "ab"  # 追加模式
+
+    timeout = httpx.Timeout(connect=15, read=60, write=30, pool=30)
+
+    with httpx.stream("GET", url, headers=headers, timeout=timeout, follow_redirects=True) as resp:
+        resp.raise_for_status()
+
+        # 如果服务端返回 200（不支持 Range），从头开始
+        if resp.status_code == 200 and existing_bytes > 0:
+            mode = "wb"
+
+        with open(part_file, mode) as f:
+            for chunk in resp.iter_bytes(chunk_size=65536):
+                f.write(chunk)
+                progress.update(task, advance=len(chunk))
+
+
+def _retry_wait(attempt: int, filename: str, error: Exception) -> None:
+    """指数退避等待"""
+    wait = RETRY_BACKOFF_BASE ** attempt
+    console.print(
+        f"  [yellow]下载 {filename} 中断 ({type(error).__name__}), "
+        f"第 {attempt} 次重试（等待 {wait}s）...[/yellow]"
+    )
+    time.sleep(wait)
 
 
 def _save_metadata(

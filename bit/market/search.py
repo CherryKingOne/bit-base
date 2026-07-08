@@ -7,11 +7,12 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
-from bit.config import BitConfig
+from bit.config import BitConfig, load_config
 
 console = Console()
 
-HF_API = "https://huggingface.co/api/models"
+# 默认 HF API 地址，运行时可通过 config.hf_base 使用镜像
+HF_API = f"{load_config().hf_base}/api/models"
 
 # 常用模型预定义（快速访问）
 CURATED_MODELS = {
@@ -83,7 +84,8 @@ def search_models(
 def get_model_info(model_name: str) -> dict | None:
     """获取模型详细信息"""
     try:
-        resp = httpx.get(f"{HF_API}/{model_name}", timeout=30, follow_redirects=True)
+        api_base = f"{load_config().hf_base}/api/models"
+        resp = httpx.get(f"{api_base}/{model_name}", timeout=30, follow_redirects=True)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
@@ -151,8 +153,9 @@ def list_categories() -> list[dict]:
 
 def _search_hf(keyword: str, limit: int) -> list[dict]:
     """搜索 HuggingFace"""
+    api_base = f"{load_config().hf_base}/api/models"
     resp = httpx.get(
-        HF_API,
+        api_base,
         params={
             "search": keyword,
             "sort": "downloads",
